@@ -1,0 +1,30 @@
+{
+  "name": "@rbw/bot",
+  "version": "1.0.0",
+  "description": "Ranked Bedwars discord bot",
+  "main": "dist/index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node dist/index.js",
+    "build": "tsc",
+    "watch": "tsc -w"
+  },
+  "keywords": [],
+  "author": "RankedBedwars",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/mongodb": "^3.6.3",
+    "@types/node": "^14.14.31",
+    "@types/node-fetch": "^2.5.7",
+    "hypixel-api-reborn": "^5.1.1"
+  },
+  "dependencies": {
+    "canvas": "^2.6.1",
+    "dayjs": "^1.10.4",
+    "discord.js": "^12.5.1",
+    "dotenv": "^8.2.0",
+    "mongodb": "^3.6.3",
+    "node-fetch": "^2.6.1",
+    "socket.io": "^3.0.5"
+  }
+}

@@ -1,0 +1,152 @@
+[
+    {
+        "name": "register",
+        "description": "Links your Discord account to a Minecraft account, verifying your ownership of it.",
+        "options": [
+            {
+                "name": "IGN",
+                "description": "The username of the Minecraft account to verify as yours.",
+                "type": 3,
+                "required": true
+            }
+        ]
+    },
+    {
+        "name": "info",
+        "description": "View the stats of another registered player.",
+        "options": [
+            {
+                "name": "player",
+                "description": "The player you'd like to lookup.",
+                "type": 6,
+                "required": true
+            }
+        ]
+    },
+    {
+        "name": "leaderboard",
+        "description": "View the top players of Ranked Bedwars!",
+        "options": [
+            {
+                "name": "elo",
+                "description": "View the players with the highest ELO.",
+                "type": 1,
+                "options": [
+                    {
+                        "name": "page",
+                        "description": "Page to view.",
+                        "type": 4
+                    }
+                ]
+            },
+            {
+                "name": "games",
+                "description": "View the players with the most games played.",
+                "type": 1,
+                "options": [
+                    {
+                        "name": "page",
+                        "description": "Page to view.",
+                        "type": 4
+                    }
+                ]
+            },
+            {
+                "name": "wins",
+                "description": "View the players with the most wins.",
+                "type": 1,
+                "options": [
+                    {
+                        "name": "page",
+                        "description": "Page to view.",
+                        "type": 4
+                    }
+                ]
+            },
+            {
+                "name": "losses",
+                "description": "View the players with the most losses.",
+                "type": 1,
+                "options": [
+                    {
+                        "name": "page",
+                        "description": "Page to view.",
+                        "type": 4
+                    }
+                ]
+            },
+            {
+                "name": "wl",
+                "description": "View the players with the highest win loss ratios.",
+                "type": 1,
+                "options": [
+                    {
+                        "name": "page",
+                        "description": "Page to view.",
+                        "type": 4
+                    }
+                ]
+            },
+            {
+                "name": "kills",
+                "description": "View the players with the most kills.",
+                "type": 1,
+                "options": [
+                    {
+                        "name": "page",
+                        "description": "Page to view.",
+                        "type": 4
+                    }
+                ]
+            },
+            {
+                "name": "kd",
+                "description": "View the players with the highest kill death ratios.",
+                "type": 1,
+                "options": [
+                    {
+                        "name": "page",
+                        "description": "Page to view.",
+                        "type": 4
+                    }
+                ]
+            },
+            {
+                "name": "winstreak",
+                "description": "View the players with the highest current winstreaks.",
+                "type": 1,
+                "options": [
+                    {
+                        "name": "page",
+                        "description": "Page to view.",
+                        "type": 4
+                    }
+                ]
+            },
+            {
+                "name": "bedsbroken",
+                "description": "View the players with the most beds broken.",
+                "type": 1,
+                "options": [
+                    {
+                        "name": "page",
+                        "description": "Page to view.",
+                        "type": 4
+                    }
+                ]
+            },
+            {
+                "name": "bblr",
+                "description": "View the players with the highest beds broken to losses ratio.",
+                "type": 1,
+                "options": [
+                    {
+                        "name": "page",
+                        "description": "Page to view.",
+                        "type": 4
+                    }
+                ]
+            }
+        ]
+    }
+]

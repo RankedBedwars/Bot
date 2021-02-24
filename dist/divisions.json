@@ -1,0 +1,119 @@
+{
+    "divisions": [
+        {
+            "name": "Coal 1",
+            "color": "#191D20",
+            "image": "coal_1.svg",
+            "min": 0,
+            "max": 100
+        }, {
+            "name": "Coal 2",
+            "color": "#191D20",
+            "image": "coal_2.svg",
+            "min": 100,
+            "max": 200
+        }, {
+            "name": "Coal 3",
+            "color": "#191D20",
+            "image": "coal_3.svg",
+            "min": 200,
+            "max": 300
+        }, {
+            "name": "Coal 4",
+            "color": "#191D20",
+            "image": "coal_4.svg",
+            "min": 300,
+            "max": 400
+        }, {
+            "name": "Iron 1",
+            "color": "#857872",
+            "image": "iron_1.svg",
+            "min": 400,
+            "max": 500
+        }, {
+            "name": "Iron 2",
+            "color": "#857872",
+            "image": "iron_2.svg",
+            "min": 500,
+            "max": 600
+        }, {
+            "name": "Iron 3",
+            "color": "#857872",
+            "image": "iron_3.svg",
+            "min": 600,
+            "max": 700
+        }, {
+            "name": "Iron 4",
+            "color": "#857872",
+            "image": "iron_4.svg",
+            "min": 700,
+            "max": 800
+        }, {
+            "name": "Gold 1",
+            "color": "#FFE049",
+            "image": "gold_1.svg",
+            "min": 800,
+            "max": 900
+        }, {
+            "name": "Gold 2",
+            "color": "#FFE049",
+            "image": "gold_2.svg",
+            "min": 900,
+            "max": 1000
+        }, {
+            "name": "Gold 3",
+            "color": "#FFE049",
+            "image": "gold_3.svg",
+            "min": 1000,
+            "max": 1100
+        }, {
+            "name": "Gold 4",
+            "color": "#FFE049",
+            "image": "gold_4.svg",
+            "min": 1100,
+            "max": 1200
+        }, {
+            "name": "Platinum 1",
+            "color": "#33C69C",
+            "image": "plat_1.svg",
+            "min": 1200,
+            "max": 1300
+        }, {
+            "name": "Platinum 2",
+            "color": "#33C69C",
+            "image": "plat_2.svg",
+            "min": 1300,
+            "max": 1400
+        }, {
+            "name": "Platinum 3",
+            "color": "#33C69C",
+            "image": "plat_3.svg",
+            "min": 1400,
+            "max": 1500
+        }, {
+            "name": "Platinum 4",
+            "color": "#33C69C",
+            "image": "plat_4.svg",
+            "min": 1500,
+            "max": 1600
+        }, {
+            "name": "Emerald",
+            "color": "#77DD77",
+            "image": "emerald.svg",
+            "min": 1600,
+            "max": 1800
+        }, {
+            "name": "Diamond",
+            "color": "#49E0FF",
+            "image": "diamond.svg",
+            "min": 1800,
+            "max": 2000
+        }, {
+            "name": "Obsidian",
+            "color": "#3D294A",
+            "image": "obsidian.svg",
+            "min": 2000,
+            "max": -1
+        }
+    ]
+}
