@@ -27,7 +27,7 @@ dotenv_1.default.config();
 const logger_1 = __importDefault(require("./logger"));
 const app_1 = __importDefault(require("./app"));
 const logger = new logger_1.default("Main");
-const mongodb_1 = require("mongodb");
+require("mongodb");
 const discord_js_1 = require("discord.js");
 const https_1 = __importDefault(require("https"));
 const node_fetch_1 = __importDefault(require("node-fetch"));
@@ -466,335 +466,49 @@ let help_cmd_cache = [];
                 tc1.delete().catch(() => logger.info('Failed to delete tc1'));
                 return tc2.delete().catch(() => logger.info('Failed to delete tc1'));
             }
-            let tookALongTime = false;
-            const timeout = setTimeout(() => {
-                tookALongTime = true;
-                textChannel.send(createEmbed("No bots are currently available to assign to this game. Please be patient.")).catch(() => logger.info('Failed to send in No bots are available message.'));
-            }, 10000);
-            game.getAssignedBot().then(async (bot) => {
-                clearTimeout(timeout);
-                if (bot === 'undefined') {
-                    if (!textChannel)
-                        return;
-                    await textChannel.send(createEmbed('The maximum waiting time has been exceeded. No bots are available right now. Please try again later.', "RED"));
-                    await utils_1.delay(5000);
-                    await textChannel.send('=fclose');
+            const start = Date.now();
+            const loading = await textChannel.send(createEmbed('Looking for an available bot...'));
+            const { reason, username: bot } = await game.getAssignedBot();
+            if (reason === 'GAME_VOID') {
+                await loading.edit(createEmbed('This game is not active. Please re-queue to start a new game.', "RED"));
+                tc1.delete().catch(() => logger.info("Failed to delete tc1"));
+                tc2.delete().catch(() => logger.info("Failed to delete tc2"));
+                await utils_1.delay(5000);
+                return textChannel.send('=fclose');
+            }
+            if (reason === 'NONE_AVAILABLE' || !bot) {
+                await loading.edit(createEmbed('The maximum waiting time has been exceeded. No bots are available right now. Please try again later.', "RED"));
+                await utils_1.delay(5000);
+                return textChannel.send('=fclose');
+            }
+            const _bot = socket_1.bots.get(bot);
+            if (!_bot) {
+                await loading.edit(`Failed to bind to **${bot}** after **${dayjs_1.default(start).from(dayjs_1.default(), true)}**.`);
+                return game.cancel();
+            }
+            await loading.edit(`The bot **${bot}** has been assigned to your game after **${dayjs_1.default(start).from(dayjs_1.default(), true)}**.`);
+            logger.info(JSON.stringify(socket_1.bots) + `, size → ${socket_1.bots.size}`);
+            logger.info(`Sending data: ${JSON.stringify([...team1.map(player => player.toJSON()), ...team2.map(player => player.toJSON())])}`);
+            _bot.once('gameCancel', () => {
+                try {
+                    setTimeout(game.cancel, 10000);
                 }
-                textChannel.send(createEmbed(tookALongTime
-                    ? `We're sorry for the delay. The bot **${bot}** has been assigned to your game.`
-                    : `The bot **${bot}** has been assigned to your game.`)).catch(() => logger.info('Failed to create `sorry for delay embed.`'));
-                if (game.state === games_1.GameState.VOID) {
-                    tc1.delete().catch(() => logger.info("Failed to delete tc1"));
-                    tc2.delete().catch(() => logger.info("Failed to delete tc2"));
-                    return;
+                catch (e) {
+                    logger.error(`Bot failed to cancel game:\n${e.stack}`);
                 }
-                logger.info(JSON.stringify(socket_1.bots) + `, size → ${socket_1.bots.size}`);
-                const _bot = socket_1.bots.get(bot);
-                if (!_bot) {
-                    textChannel.send(createEmbed(`Failed to bind to **${bot}**.`)).catch(() => logger.info("Failed to send 'Failed to bind bot message.'"));
-                    utils_1.BotManager.release(bot);
-                    return game.cancel();
-                }
-                logger.info(`Sending data: ${JSON.stringify([...team1.map(player => player.toJSON()), ...team2.map(player => player.toJSON())])}`);
-                _bot.once("gameCancel", async () => {
-                    try {
-                        setTimeout(await game.cancel(), 10000);
-                    }
-                    catch (e) {
-                        logger.error(`Bot failed to cancel game:\n${e.stack}`);
-                    }
-                });
-                _bot.emit("gameStart", {
-                    players: [...team1.map(player => player.toJSON()), ...team2.map(player => player.toJSON())],
-                    map, number: gameNumber
-                });
-                game.start(team1, team2);
             });
+            _bot.emit('gameStart', {
+                players: [...team1.map(player => player.toJSON()), ...team2.map(player => player.toJSON())],
+                map, number: gameNumber
+            });
+            game.start(team1, team2);
         }
         catch (e) {
             logger.error(`Failed to start a new game:\n${e.stack}`);
         }
     });
     client.on("message", async function (message) {
-        console.log(message.content);
         if (!message.guild) {
-            return;
-        }
-        if (message.content.startsWith('=testgame')) {
-            const resultsObject = {
-                players: {
-                    GoogleSites: {
-                        minecraft: { name: 'GoogleSites' },
-                        discord: '314566854376947725',
-                        messages: [],
-                        joined: true,
-                        team: '§a',
-                        deaths: 0,
-                        streak: 0,
-                        killTiming: [],
-                        bedsLost: 1,
-                        bedsBroken: 0,
-                        finalKills: 0,
-                        finalDeaths: 0,
-                        kills: 0,
-                        wins: 1,
-                        losses: 0,
-                        winMessage: null,
-                        loseMessage: null,
-                        rank: 'MVP+'
-                    },
-                    SalazarsRevenge: {
-                        minecraft: { name: 'SalazarsRevenge' },
-                        discord: '646075137652817921',
-                        messages: [],
-                        joined: true,
-                        team: '§a',
-                        deaths: 0,
-                        streak: 0,
-                        kills: 0,
-                        killTiming: [],
-                        bedsLost: 1,
-                        bedsBroken: 0,
-                        finalKills: 0,
-                        finalDeaths: 0,
-                        wins: 1,
-                        losses: 0,
-                        winMessage: null,
-                        loseMessage: null,
-                        rank: 'MVP++'
-                    },
-                    kevinjkschool: {
-                        minecraft: { name: 'kevinjkschool' },
-                        discord: '750805199219851265',
-                        messages: [],
-                        joined: true,
-                        team: '§a',
-                        deaths: 0,
-                        streak: 0,
-                        kills: 0,
-                        killTiming: [],
-                        bedsLost: 1,
-                        bedsBroken: 0,
-                        finalKills: 0,
-                        finalDeaths: 0,
-                        wins: 1,
-                        losses: 0,
-                        winMessage: null,
-                        loseMessage: null,
-                        rank: null
-                    },
-                    Raidn: {
-                        minecraft: { name: 'Raidn' },
-                        discord: '331760118020571146',
-                        messages: [],
-                        joined: true,
-                        team: '§a',
-                        deaths: 0,
-                        streak: 0,
-                        killTiming: [],
-                        bedsLost: 1,
-                        bedsBroken: 0,
-                        kills: 0,
-                        finalKills: 0,
-                        finalDeaths: 0,
-                        wins: 1,
-                        losses: 0,
-                        winMessage: null,
-                        loseMessage: null,
-                        rank: 'MVP+'
-                    },
-                    SurvivalTactics: {
-                        minecraft: { name: 'SurvivalTactics' },
-                        discord: '292374244904665088',
-                        messages: [],
-                        joined: true,
-                        team: '§c',
-                        deaths: 1,
-                        kills: 0,
-                        streak: 0,
-                        killTiming: [],
-                        bedsLost: 1,
-                        bedsBroken: 0,
-                        finalKills: 0,
-                        finalDeaths: 0,
-                        wins: 0,
-                        losses: 1,
-                        winMessage: null,
-                        loseMessage: null,
-                        rank: null
-                    },
-                    Plateni: {
-                        minecraft: { name: 'Plateni' },
-                        discord: '352432156783542273',
-                        messages: [],
-                        joined: true,
-                        team: '§c',
-                        deaths: 1,
-                        streak: 0,
-                        killTiming: [],
-                        bedsLost: 1,
-                        bedsBroken: 0,
-                        kills: 0,
-                        finalKills: 0,
-                        finalDeaths: 0,
-                        wins: 0,
-                        losses: 1,
-                        winMessage: null,
-                        loseMessage: null,
-                        rank: 'MVP++'
-                    },
-                    defaultpack: {
-                        minecraft: { name: 'defaultpack' },
-                        discord: '785327104144703548',
-                        messages: [],
-                        joined: true,
-                        team: '§c',
-                        deaths: 1,
-                        streak: 0,
-                        killTiming: [],
-                        bedsLost: 1,
-                        bedsBroken: 0,
-                        finalKills: 0,
-                        finalDeaths: 0,
-                        wins: 0,
-                        losses: 1,
-                        winMessage: null,
-                        loseMessage: null,
-                        kills: 0,
-                        rank: 'MVP+'
-                    },
-                    Manikins: {
-                        minecraft: { name: 'Manikins' },
-                        discord: '394943206359564289',
-                        messages: [],
-                        joined: true,
-                        team: '§c',
-                        deaths: 0,
-                        streak: 0,
-                        killTiming: [],
-                        bedsLost: 1,
-                        bedsBroken: 0,
-                        finalKills: 0,
-                        kills: 0,
-                        finalDeaths: 0,
-                        wins: 0,
-                        losses: 1,
-                        winMessage: null,
-                        loseMessage: null,
-                        rank: 'MVP++'
-                    }
-                },
-                map: 'Temple',
-                startedAt: 1614113987096,
-                endedAt: null,
-                warnings: {
-                    kevinjkschool: { '280:0:34': 1 },
-                    Raidn: { '146:0:0': 1, '280:0:34': 1 }
-                },
-                partied: false,
-                number: 23531,
-                beds: 1,
-                diamond: false
-            };
-            const colourMap = new Map([
-                ['§a', 'Green'],
-                ['Green', '§a'],
-                ['§b', 'Aqua'],
-                ['Aqua', '§b'],
-                ['§c', 'Red'],
-                ['Red', '§c'],
-                ['§d', 'Pink'],
-                ['Pink', '§d'],
-                ['§e', 'Yellow'],
-                ['Yellow', '§e'],
-                ['§f', 'White'],
-                ['White', '§f'],
-                ['§8', 'Gray'],
-                ['Gray', '§8'],
-                ['§9', 'Blue'],
-                ['Blue', '§9']
-            ]);
-            const db = await database_1.default;
-            const game = await db.activeGame.findOne({ "botIGN": bot_1.default }) || { gameNumber: resultsObject.number, _id: new mongodb_1.ObjectId(), botIGN: bot_1.default };
-            const results = Object.values(resultsObject.players);
-            const players = (await (await database_1.default).players.find({ discord: { $in: results.map((r) => r.discord) } }).toArray()).reduce((a, b) => {
-                a[b.discord] = b;
-                return a;
-            }, {});
-            const calculations = Object.values(resultsObject.players).map((p) => {
-                const user = players[p.discord];
-                const player = {
-                    minecraft: { name: p.minecraft.name },
-                    elo: user?.elo ?? 400,
-                    kills: p.kills || 0,
-                    winstreak: user?.winstreak || 0,
-                    bedstreak: user?.bedstreak || 0,
-                    team: p.team
-                };
-                return player;
-            });
-            const winner = results.find((p) => p.wins > 0)?.team ?? '§a';
-            const [ratings] = utils_1.calculateElo(calculations, winner);
-            const guild = await bot_1.defaultGuild;
-            const teams = {};
-            const statistics = Object.values(resultsObject.players).map((p) => {
-                const player = players[p.discord];
-                const rating = ratings[p.minecraft.name];
-                const updated = {
-                    ...player,
-                    bedstreak: p.bedsBroken ? (player?.bedstreak ?? 0) + 1 : 0,
-                    winstreak: p.wins ? (player?.winstreak ?? 0) + 1 : 0,
-                    losestreak: p.losses ? (player?.losestreak ?? 0) + 1 : 0,
-                    kills: (player?.kills || 0) + (p.kills || 0),
-                    deaths: (player?.deaths || 0) + (p.deaths || 0),
-                    bedsLost: (player?.bedsLost || 0) + (p.bedsLost || 0),
-                    bedsBroken: (player?.bedsBroken || 0) + (p.bedsBroken || 0),
-                    games: (player?.games || 0) + 1
-                };
-                updated.elo = Math.max(0, (p.bedsBroken || 0) * 10 + rating);
-                guild.members.fetch(player.discord)
-                    .then(m => m.setNickname(`[${updated.elo}] ${p.minecraft.name}`))
-                    .catch(() => { });
-                if (p.team) {
-                    const entry = {
-                        kills: p.kills || 0,
-                        deaths: p.deaths || 0,
-                        destroyedBed: (p.bedsLost ?? 0) > 0,
-                        username: p.minecraft.name,
-                        winstreak: (player?.winstreak || 0),
-                        bedstreak: (player?.bedstreak || 0),
-                        discord: player?.discord || null,
-                        oldRating: player?.elo || 400,
-                        newRating: updated.elo
-                    };
-                    if (!teams[p.team])
-                        teams[p.team] = { players: [entry], winner: (p.wins ?? 0) > 0 };
-                    else
-                        teams[p.team].players.push(entry);
-                }
-                return updated;
-            }).filter((s) => s !== null);
-            const _operation = db.players.initializeUnorderedBulkOp();
-            for (const player of statistics) {
-                _operation.find({ discord: player.discord }).replaceOne(player);
-            }
-            const teamColours = Object.keys(teams);
-            await Promise.all([
-                utils_1.gameReport(teams, winner, game.number, results.map((r) => `<@${r.discord}>`).join(''), colourMap, guild),
-                _operation.execute(),
-                db.games.updateOne({
-                    _id: game._id
-                }, {
-                    $set: {
-                        state: games_1.GameState.FINISHED,
-                        team1: teams[teamColours[0]],
-                        team2: teams[teamColours[1]],
-                        number: resultsObject.number
-                    }
-                }, {
-                    upsert: true,
-                })
-            ]);
             return;
         }
         if (message.content === '=help') {

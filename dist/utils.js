@@ -557,35 +557,15 @@ class LocalGame {
             this.logger.error(`Failed to entering the starting phase:\n${e.stack}`);
         }
     }
-    getAssignedBot() {
-        return new Promise(async (res, rej) => {
-            if (this._state === games_1.GameState.VOID)
-                return rej(new Error("GAME_VOID"));
-            if (this._bot)
-                return res(this._bot);
-            try {
-                const bot = await BotManager.assign(this.id);
-                this._bot = bot;
-                res(bot);
-            }
-            catch (e) {
-                if (e.message !== "NONE_AVAILABLE")
-                    this.logger.error(`Failed to bind to a bot:\n${e.stack}`);
-                let x = 0;
-                const checker = setInterval(() => {
-                    if (x === 5) {
-                        res("undefined");
-                        clearInterval(checker);
-                    }
-                    x++;
-                    BotManager.assign(this.id).then(bot => {
-                        clearInterval(checker);
-                        this._bot = bot;
-                        res(bot);
-                    }).catch(_ => null);
-                }, 15000);
-            }
-        });
+    async getAssignedBot() {
+        if (this._state === games_1.GameState.VOID)
+            return { error: true, reason: 'GAME_VOID' };
+        if (this._bot)
+            return { error: false, username: this._bot };
+        const bot = await BotManager.assign(this.id);
+        if (bot === null)
+            return { error: true, reason: 'NONE_AVAILABLE' };
+        return { error: false, username: this._bot = bot };
     }
     async update(update, options) {
         return await (await database_1.default).games.updateOne({
@@ -820,7 +800,7 @@ async function createNewGame() {
     }).sort({ _id: 1 }).count();
     const game = new LocalGame(gameNumber, insertedId);
     exports.activeGames.set(insertedId, game);
-    return { game, gameNumber };
+    return { game, gameNumber, insertedId };
 }
 exports.createNewGame = createNewGame;
 var BotManager;
@@ -843,56 +823,47 @@ var BotManager;
         }
     });
     async function assign(game) {
-        let botAssigned = false;
-        const checkedBots = [];
-        let assignedBot = '';
-        while (!botAssigned) {
-            await delay(1000);
-            const value = await (await database_1.default).bots.findOne({
+        const db = await database_1.default;
+        const assignedGames = await BotManager.assignedGamesCache;
+        const ignore = [];
+        const start = Date.now();
+        while (Date.now() - start < 120000 && await delay(1000)) {
+            const { value } = await db.bots.findOneAndUpdate({
                 assignedGame: {
                     $exists: false
                 },
                 username: {
-                    $nin: checkedBots
+                    $nin: ignore
                 }
-            });
+            }, {
+                $set: {
+                    assignedGame: new mongodb_1.ObjectId()
+                }
+            }, { returnOriginal: true });
             if (!value)
-                break;
-            await checkStatus(value.username).then(res => {
-                if (!res) {
-                    checkedBots.push(value.username);
-                }
-                else {
-                    logger.info(`${value.username} online --> ${res}`);
-                    assignedBot = value.username;
-                    botAssigned = true;
-                }
-            }).catch(() => logger.info(`Couldn't check status.`));
-        }
-        if (checkedBots.length !== 0)
-            logger.warn(`Offline Bots --> ${checkedBots.join(' ')}`);
-        checkedBots.forEach(bot => {
-            const _bot = socket_1.bots.get(bot);
-            if (!_bot)
-                return logger.warn(`${bot} does not exist in Bots cache.`);
-            _bot.emit("restart");
-        });
-        if (assignedBot === '')
-            throw new Error("NONE_AVAILABLE");
-        (await BotManager.assignedGamesCache).set(assignedBot, game);
-        await (await database_1.default).bots.updateOne({
-            username: assignedBot
-        }, {
-            $set: {
-                assignedGame: new mongodb_1.ObjectId(),
+                continue;
+            const result = await checkStatus(value.username)
+                .then(r => !!r)
+                .catch(() => false);
+            if (result === false || assignedGames.has(value.username)) {
+                ignore.push(value.username);
+                await db.bots.updateOne({
+                    username: value.username
+                }, {
+                    $unset: {
+                        assignedGame: true
+                    }
+                });
+                continue;
             }
-        }, {
-            upsert: true
-        });
-        return assignedBot;
+            assignedGames.set(value.username, game);
+            return value.username;
+        }
+        return null;
     }
     BotManager.assign = assign;
     async function release(bot) {
+        console.trace(`Release ${bot}`);
         try {
             await (await database_1.default).bots.updateOne({
                 username: bot,
@@ -983,7 +954,7 @@ async function updateRoles(member_id, role1_id, role2_id) {
 exports.updateRoles = updateRoles;
 function delay(delay) {
     return new Promise(function (resolve) {
-        setTimeout(resolve, delay);
+        setTimeout(resolve, delay, true);
     });
 }
 exports.delay = delay;

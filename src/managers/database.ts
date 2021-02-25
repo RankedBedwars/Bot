@@ -16,7 +16,7 @@ export default new Promise<Database>((res, rej) => {
 
     MongoClient.connect(DB_URL, { useNewUrlParser: true, useUnifiedTopology: true }).then(client => {
 
-        const db = client.db("rbw_dev");
+        const db = client.db("rbw");
 
         res({
             bots: db.collection("bots"),
