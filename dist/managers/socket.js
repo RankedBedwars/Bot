@@ -46,20 +46,17 @@ if (NODE_ENV === "development")
 const port = process.env.PORT ? parseInt(process.env.PORT) : 8080;
 const server = http_1.createServer();
 const io = new socket_io_1.Server(server);
-io.use((socket, next) => {
+io.on('connection', socket => {
     const { key, bot } = socket.handshake.query;
-    if (!key) {
-        if (NODE_ENV === "development")
-            exports.devLogger.warn("Refusing connection from unauthenticated socket.");
-        return next(new Error("Authentication failed."));
-    }
+    console.log(key, bot);
     if (SOCKET_KEY !== key) {
         if (NODE_ENV === "development")
             exports.devLogger.warn("Refusing connection from socket using an invalid key.");
-        return next(new Error("Authentication failed."));
+        return socket.disconnect();
     }
     if (exports.bots.get(bot) && NODE_ENV === "development") {
         logger.info(JSON.stringify(exports.bots));
+        socket.disconnect();
         return exports.devLogger.info(`${bot} has connected, but is already in the socket cache.`);
     }
     exports.bots.set(bot, socket);
@@ -77,7 +74,7 @@ io.use((socket, next) => {
     });
     socket.on("gameFinish", async (resultsObject) => {
         const db = await database_1.default;
-        const game = await db.activeGame.findOne({ "botIGN": bot }) || { gameNumber: resultsObject.number, _id: new mongodb_1.ObjectId(), botIGN: bot };
+        const game = await db.games.findOne({ number: resultsObject.number }) ?? { number: resultsObject.number, _id: new mongodb_1.ObjectId() };
         const results = Object.values(resultsObject.players);
         const players = (await (await database_1.default).players.find({ discord: { $in: results.map((r) => r.discord) } }).toArray()).reduce((a, b) => {
             a[b.discord] = b;
@@ -89,6 +86,7 @@ io.use((socket, next) => {
                 minecraft: { name: p.minecraft.name },
                 elo: user?.elo ?? 400,
                 kills: p.kills || 0,
+                wins: p.wins || 0,
                 winstreak: user?.winstreak || 0,
                 bedstreak: user?.bedstreak || 0,
                 team: p.team
@@ -100,8 +98,8 @@ io.use((socket, next) => {
         const guild = await bot_1.defaultGuild;
         const teams = {};
         const statistics = Object.values(resultsObject.players).map((p) => {
-            const player = players[p.discord];
-            const rating = ratings[p.minecraft.name];
+            const player = players[p.discord] ?? {};
+            const rating = ratings[p.minecraft.name] ?? 400;
             const updated = {
                 ...player,
                 bedstreak: p.bedsBroken ? (player?.bedstreak ?? 0) + 1 : 0,
@@ -125,7 +123,7 @@ io.use((socket, next) => {
                     username: p.minecraft.name,
                     winstreak: (player?.winstreak || 0),
                     bedstreak: (player?.bedstreak || 0),
-                    discord: player?.discord || null,
+                    discord: p?.discord || player?.discord || null,
                     oldRating: player?.elo || 400,
                     newRating: updated.elo
                 };
@@ -145,37 +143,37 @@ io.use((socket, next) => {
             utils_1.gameReport(teams, winner, resultsObject.number, results.map((r) => `<@${r.discord}>`).join(''), colourMap, guild),
             _operation.execute(),
             db.games.updateOne({
-                _id: game._id
+                number: resultsObject.number
             }, {
                 $set: {
                     state: games_1.GameState.FINISHED,
                     team1: teams[teamColours[0]],
-                    team2: teams[teamColours[1]],
-                    number: resultsObject.number
+                    team2: teams[teamColours[1]]
                 }
             }, {
                 upsert: true,
             })
         ]);
+        console.log(game);
         utils_1.BotManager.release(bot);
         if (!guild)
             return;
         setTimeout(async () => {
-            if (!(game.textChannel && game.team1Channel && game.team2Channel))
-                return;
-            guild.channels.cache.get(game.textChannel).delete().catch(_ => null);
-            const team1Channel = guild.channels.cache.get(game.team1Channel);
-            const team2Channel = guild.channels.cache.get(game.team2Channel);
-            if (team1Channel) {
-                await Promise.all(team1Channel.members.map(member => member.voice.setChannel(constants_1.Constants.WAITING_ROOM))).catch(_ => null);
-                team1Channel?.delete().catch(_ => null);
+            const teamOneVoice = guild.channels.cache.get(game.team1Channel);
+            const teamTwoVoice = guild.channels.cache.get(game.team2Channel);
+            const textChannel = guild.channels.cache.get(game.textChannel);
+            if (textChannel)
+                textChannel.delete();
+            if (teamOneVoice) {
+                await Promise.allSettled(teamOneVoice.members.map(m => m.voice.setChannel(constants_1.Constants.WAITING_ROOM)));
+                await teamOneVoice.delete().catch(() => { });
             }
-            if (team2Channel) {
-                await Promise.all(team2Channel.members.map(member => member.voice.setChannel(constants_1.Constants.WAITING_ROOM))).catch(_ => null);
-                team2Channel?.delete().catch(_ => null);
+            if (teamTwoVoice) {
+                await Promise.allSettled(teamTwoVoice.members.map(m => m.voice.setChannel(constants_1.Constants.WAITING_ROOM)));
+                await teamTwoVoice.delete().catch(() => { });
             }
         }, 10000);
-        await db.activeGame.deleteOne({ _id: game._id });
+        await db.activeGame.deleteOne({ number: resultsObject.number });
         logger.info(`Successfully finished game ${game._id} (managed by ${bot}).`);
     });
     socket.on("alertStaff", async (nickIGN, gamePlayers) => {
@@ -214,7 +212,6 @@ io.use((socket, next) => {
         if (socket)
             socket.emit("actualgamestart", new_players);
     });
-    next();
 });
 server.listen(port, () => {
     logger.info(`Now listening on port ${port}.`);

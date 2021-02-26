@@ -366,8 +366,7 @@ function calculateElo(players, winner, K = 64) {
         a[0] += b.kills || 0;
         if (!a[1][b.team]) {
             a[1][b.team] = {
-                players: [],
-                S: b.wins === 1 ? 1 : 0
+                players: []
             };
         }
         a[1][b.team].players.push(b);
@@ -398,13 +397,13 @@ function calculateElo(players, winner, K = 64) {
         let rating = Math.round(K * (team.S - team.E) + 0.5 * K * (L - E) + 0.5 * K * w(player.winstreak) + K * b(player.bedstreak));
         if (team.S) {
             while (rating <= 10)
-                rating += Math.round((5000 - player.elo) / 300);
+                rating += Math.round((5000 - (player.elo || 400)) / 300);
         }
         else {
             while (rating >= 0)
-                rating -= Math.round((5000 - player.elo) / 300);
+                rating -= Math.round((5000 - (player.elo || 400)) / 300);
         }
-        a[player.minecraft.name] = rating + player.elo;
+        a[player.minecraft.name] = rating + (player.elo || 400);
         return a;
     }, {});
     return [ratings, teams];
@@ -509,26 +508,22 @@ class LocalGame {
     getFullPlayer(player) {
         return this.team1Players?.find(({ minecraft }) => minecraft.name === player) ?? this.team2Players?.find(({ minecraft }) => minecraft.name === player) ?? null;
     }
-    async cancel() {
+    async cancel(deleteChannels = false) {
         this._state = games_1.GameState.VOID;
         try {
             await Promise.all([
                 this.update({
                     $set: {
                         state: games_1.GameState.VOID,
-                    },
-                    $unset: {
-                        textChannel: "",
-                        voiceChannel: "",
                     }
                 }),
                 ...this._bot ? [BotManager.release(this._bot)] : [],
             ]);
         }
         catch (e) {
-            this.logger.error(`Failed to cancel the game:\n${e.stack}`);
+            console.error(`Failed to cancel the game:\n${e.stack}`);
         }
-        return async () => {
+        if (deleteChannels) {
             this._textChannel?.delete().catch(_ => null);
             if (this.team1Channel) {
                 await Promise.all(this.team1Channel.members.map(member => member.voice.setChannel(constants_1.Constants.WAITING_ROOM))).catch(_ => null);
@@ -538,17 +533,14 @@ class LocalGame {
                 await Promise.all(this.team2Channel.members.map(member => member.voice.setChannel(constants_1.Constants.WAITING_ROOM))).catch(_ => null);
                 this.team2Channel?.delete().catch(_ => null);
             }
-        };
+        }
+        return;
     }
     async enterStartingState() {
         try {
             await this.update({
                 $set: {
                     state: games_1.GameState.STARTING,
-                },
-                $unset: {
-                    textChannel: "",
-                    voiceChannel: "",
                 }
             });
             this._state = games_1.GameState.STARTING;
@@ -803,63 +795,44 @@ async function createNewGame() {
     return { game, gameNumber, insertedId };
 }
 exports.createNewGame = createNewGame;
+async function isAssigned(username) {
+    const bot = socket_1.bots.get(username);
+    if (!bot)
+        return true;
+    return new Promise(r => {
+        bot.emit('isAssigned', r);
+    });
+}
 var BotManager;
 (function (BotManager) {
     const logger = new logger_1.default("Mineflayer Bot Manager");
-    BotManager.assignedGamesCache = new Promise(async (res, rej) => {
-        try {
-            const bots = await (await database_1.default).bots.find().toArray();
-            const collection = new discord_js_1.Collection();
-            bots.forEach(bot => collection.set(bot.username, bot.assignedGame ?? null));
-            res(collection);
-            const { length } = bots;
-            if (length > 0)
-                return logger.info(`Cached the statuses of ${length} bots.`);
-            logger.error("No bots were defined in the database. This will cause ALL games to never start.");
-        }
-        catch (e) {
-            logger.error(`Failed to create the assigned games cache:\n${e.stack}`);
-            rej(e);
-        }
-    });
     async function assign(game) {
         const db = await database_1.default;
-        const assignedGames = await BotManager.assignedGamesCache;
-        const ignore = [];
         const start = Date.now();
-        while (Date.now() - start < 120000 && await delay(1000)) {
-            const { value } = await db.bots.findOneAndUpdate({
+        let value = null;
+        while (!value && Date.now() - start < 60000) {
+            ({ value } = await db.bots.findOneAndUpdate({
                 assignedGame: {
                     $exists: false
-                },
-                username: {
-                    $nin: ignore
                 }
             }, {
                 $set: {
-                    assignedGame: new mongodb_1.ObjectId()
+                    assignedGame: game
                 }
-            }, { returnOriginal: true });
-            if (!value)
-                continue;
-            const result = await checkStatus(value.username)
-                .then(r => !!r)
-                .catch(() => false);
-            if (result === false || assignedGames.has(value.username)) {
-                ignore.push(value.username);
+            }, { returnOriginal: true }));
+            if (value && await isAssigned(value.username) === true) {
                 await db.bots.updateOne({
                     username: value.username
                 }, {
-                    $unset: {
-                        assignedGame: true
+                    $set: {
+                        assignedGame: new mongodb_1.ObjectId()
                     }
                 });
-                continue;
+                value = null;
             }
-            assignedGames.set(value.username, game);
-            return value.username;
+            await delay(1000);
         }
-        return null;
+        return value?.username ?? null;
     }
     BotManager.assign = assign;
     async function release(bot) {
@@ -869,31 +842,17 @@ var BotManager;
                 username: bot,
             }, {
                 $unset: {
-                    assignedGame: "",
+                    assignedGame: true,
                 }
             });
         }
         catch { }
         ;
-        (await BotManager.assignedGamesCache).delete(bot);
     }
     BotManager.release = release;
     async function getAssignedGame(name, options = {}) {
-        try {
-            const cache = (await BotManager.assignedGamesCache);
-            if (!options.update)
-                return cache.get(name) ?? null;
-            const data = await (await database_1.default).bots.findOne({ username: name });
-            if (!data)
-                return null;
-            const game = data.assignedGame ?? null;
-            cache.set(data.username, game);
-            return game;
-        }
-        catch (e) {
-            logger.error(`Failed to get the assigned game of ${name}:\n${e.stack}`);
-            return null;
-        }
+        const data = await (await database_1.default).bots.findOne({ username: name });
+        return data?.assignedGame ?? null;
     }
     BotManager.getAssignedGame = getAssignedGame;
 })(BotManager = exports.BotManager || (exports.BotManager = {}));
@@ -940,7 +899,7 @@ async function gameReport(teams, winner, number, tag, nameMap, guild) {
         const m = await channel.send(tag, scoring);
     }
     catch (e) {
-        console.log(e);
+        console.log('GAME_ERROR', e);
         console.log(`Couldn't send Game Report for game: ${number}`);
     }
 }
@@ -953,9 +912,7 @@ async function updateRoles(member_id, role1_id, role2_id) {
 }
 exports.updateRoles = updateRoles;
 function delay(delay) {
-    return new Promise(function (resolve) {
-        setTimeout(resolve, delay, true);
-    });
+    return new Promise(r => setTimeout(r, delay, true));
 }
 exports.delay = delay;
 function findOpenCategory(categories) {
@@ -979,7 +936,7 @@ async function checkStatus(username) {
         console.log(`isOnline --> ${player.isOnline}`);
         bool = player.isOnline;
     }).catch((e) => {
-        console.error(e);
+        console.error('ASD', e);
     });
     return bool;
 }

@@ -1,5 +1,6 @@
 import { CategoryChannel, Collection, GuildMember, MessageEmbed, MessageReaction, TextChannel, User, VoiceChannel } from "discord.js";
-import { ObjectID, ObjectId, UpdateOneOptions, UpdateQuery } from "mongodb";
+import type { ObjectId as ObjectIdType, UpdateOneOptions, UpdateQuery } from "mongodb";
+import { ObjectId } from 'mongodb';
 import { Constants } from "./constants";
 import Logger from "./logger";
 import bot, { defaultGuild } from "./managers/bot";
@@ -237,7 +238,7 @@ export class Player {
 export namespace Players {
 
     /** Gets a player by their **Competitive Bedwars ID**. */
-    export async function getById(id: ObjectId){
+    export async function getById(id: ObjectIdType){
         const data = await (await database).players.findOne({ _id: id });
         return data ? new Player(data) : null;
     }
@@ -255,13 +256,13 @@ export namespace Players {
     }
 
     /** Gets multiple players by their **Competitive Bedwars ID**. */
-    export async function getManyById(ids: ObjectId[]){
+    export async function getManyById(ids: ObjectIdType[]){
         const data = await (await database).players.find({
             _id: {
                 $in: ids
             }
         }).toArray();
-        const players = new Collection<ObjectId, Player>();
+        const players = new Collection<ObjectIdType, Player>();
         data.forEach(player => players.set(player._id, new Player(player)));
         return players;
     }
@@ -413,8 +414,7 @@ export function calculateElo(players: any[], winner: string, K = 64) {
 
 		if (!a[1][b.team]) {
 			a[1][b.team] = {
-				players: [],
-				S: b.wins === 1 ? 1 : 0
+				players: []
 			};
 		}
 
@@ -460,13 +460,13 @@ export function calculateElo(players: any[], winner: string, K = 64) {
 
         if (team.S) {
             while (rating <= 10)
-                rating += Math.round((5000 - player.elo) / 300);
+                rating += Math.round((5000 - (player.elo || 400)) / 300);
         } else {
             while (rating >= 0)
-                rating -= Math.round((5000 - player.elo) / 300);
+                rating -= Math.round((5000 - (player.elo || 400)) / 300);
         }
 
-        a[player.minecraft.name] = rating + player.elo;
+        a[player.minecraft.name] = rating + (player.elo || 400);
 
         return a;
 	}, {});
@@ -489,7 +489,7 @@ export class LocalGame {
     private team1Channel?: VoiceChannel;
     private team2Channel?: VoiceChannel;
 
-    constructor(public readonly gameNumber: number, public readonly id: ObjectId){};
+    constructor(public readonly gameNumber: number, public readonly id: ObjectIdType){};
 
     get state(){
         return this._state;
@@ -597,25 +597,22 @@ export class LocalGame {
         return this.team1Players?.find(({ minecraft }) => minecraft.name === player) ?? this.team2Players?.find(({ minecraft }) => minecraft.name === player) ?? null;
     }
 
-    async cancel(){
+    async cancel(deleteChannels: boolean = false) {
         this._state = GameState.VOID;
         try {
             await Promise.all<any>([
                 this.update({
                     $set: {
                         state: GameState.VOID,
-                    },
-                    $unset: {
-                        textChannel: "",
-                        voiceChannel: "",
                     }
                 }),
                 ...this._bot ? [BotManager.release(this._bot)] : [],
             ])
         } catch(e){
-            this.logger.error(`Failed to cancel the game:\n${e.stack}`);
+            console.error(`Failed to cancel the game:\n${e.stack}`);
         }
-        return async () => {
+
+        if (deleteChannels) {
             this._textChannel?.delete().catch(_ => null);
             if(this.team1Channel){
                 await Promise.all(this.team1Channel!.members.map(member => member.voice.setChannel(Constants.WAITING_ROOM))).catch(_ => null);
@@ -626,6 +623,8 @@ export class LocalGame {
                 this.team2Channel?.delete().catch(_ => null);
             }
         }
+
+        return;
     }
 
     async enterStartingState(){
@@ -633,10 +632,6 @@ export class LocalGame {
             await this.update({
                 $set: {
                     state: GameState.STARTING,
-                },
-                $unset: {
-                    textChannel: "",
-                    voiceChannel: "",
                 }
             });
             this._state = GameState.STARTING;
@@ -917,7 +912,7 @@ export class LocalGame {
 
 }
 
-export const activeGames = new Collection<ObjectId, LocalGame>();
+export const activeGames = new Collection<ObjectIdType, LocalGame>();
 
 export async function hasPerms(member: GuildMember, roles: string[]) {
     let hasPerms = false;
@@ -950,73 +945,54 @@ export async function createNewGame(){
     return { game, gameNumber, insertedId };
 }
 
+async function isAssigned(username: string) {
+    const bot = bots.get(username);
+
+    if (!bot) return true;
+
+    return new Promise(r => {
+        bot.emit('isAssigned', r);
+    });
+}
+
 export namespace BotManager {
 
     const logger = new Logger("Mineflayer Bot Manager");
 
-    /** Cache of all bots, and whether they are currently assigned to a game or not. */
-    export const assignedGamesCache = new Promise<Collection<string, ObjectId | null>>(async (res, rej) => {
-        try {
-            const bots = await (await database).bots.find().toArray();
-            const collection = new Collection<string, ObjectId | null>();
-            bots.forEach(bot => collection.set(bot.username, bot.assignedGame ?? null));
-            res(collection);
-            const { length } = bots;
-            if(length > 0) return logger.info(`Cached the statuses of ${length} bots.`);
-            logger.error("No bots were defined in the database. This will cause ALL games to never start.");
-        } catch(e){
-            logger.error(`Failed to create the assigned games cache:\n${e.stack}`);
-            rej(e);
-        }
-    });
-
     /** Assigns an available bot to the given game. Rejects if no bots are available. Resolves to the username of the bot that's been assigned to the game. */
     export async function assign(game: ObjectId): Promise<string | null> {
         const db = await database;
-        const assignedGames = await assignedGamesCache;
-        const ignore: string[] = [];
         const start = Date.now();
 
-        while (Date.now() - start < 120000 && await delay(1000)) {
-            const { value } = await db.bots.findOneAndUpdate({
+        let value = null;
+
+        while (!value && Date.now() - start < 60000) {
+            ({ value } = await db.bots.findOneAndUpdate({
                 assignedGame: {
                     $exists: false
-                },
-                username: {
-                    $nin: ignore
                 }
             }, {
                 $set: {
-                    assignedGame: new ObjectId()
+                    assignedGame: game
                 }
-            }, { returnOriginal: true });
+            }, { returnOriginal: true }));
 
-            if (!value) continue;
-
-            const result = await checkStatus(value.username)
-                .then(r => !!r)
-                .catch(() => false);
-
-            if (result === false || assignedGames.has(value.username)) {
-                ignore.push(value.username);
-
+            if (value && await isAssigned(value.username) === true) {
                 await db.bots.updateOne({
                     username: value.username
                 }, {
-                    $unset: {
-                        assignedGame: true
+                    $set: {
+                        assignedGame: new ObjectId()
                     }
                 });
 
-                continue;
+                value = null;
             }
 
-            assignedGames.set(value.username, game);
-
-            return value.username;
+            await delay(1000);
         }
 
-        return null;
+        return value?.username ?? null;
     }
 
     /** Releases the specified bot from its game, allowing it to be assigned to a new game. */
@@ -1028,11 +1004,10 @@ export namespace BotManager {
                 username: bot,
             }, {
                 $unset: {
-                    assignedGame: "",
+                    assignedGame: true,
                 }
             });
         } catch {};
-        (await assignedGamesCache).delete(bot);
     }
 
     export interface GetAssignedGameOptions {
@@ -1041,19 +1016,10 @@ export namespace BotManager {
     }
 
     /** Gets the game a bot is currently assigned to. */
-    export async function getAssignedGame(name: string, options: GetAssignedGameOptions = {}){
-        try {
-            const cache = (await assignedGamesCache);
-            if(!options.update) return cache.get(name) ?? null;
-            const data = await (await database).bots.findOne({ username: name });
-            if(!data) return null;
-            const game = data.assignedGame ?? null;
-            cache.set(data.username, game);
-            return game;
-        } catch(e){
-            logger.error(`Failed to get the assigned game of ${name}:\n${e.stack}`);
-            return null;
-        }
+    export async function getAssignedGame(name: string, options: GetAssignedGameOptions = {}) {
+        const data = await (await database).bots.findOne({ username: name });
+
+        return data?.assignedGame ?? null;
     }
 }
 
@@ -1113,7 +1079,7 @@ export async function gameReport(teams: any, winner: string, number: number, tag
         const m = await channel.send(tag, scoring);
     }
     catch(e) {
-        console.log(e);
+        console.log('GAME_ERROR', e);
         console.log(`Couldn't send Game Report for game: ${number}`);
     }
 }
@@ -1125,10 +1091,8 @@ export async function updateRoles(member_id: string, role1_id: string, role2_id:
     await member?.roles.add(role2_id).catch(() => null);
 }
 
-export function delay(delay: number){
-    return new Promise(function(resolve) {
-        setTimeout(resolve, delay, true);
-    });
+export function delay(delay: number) {
+    return new Promise(r => setTimeout(r, delay, true));
 }
 
 /** Given an array of CategoryChannels, resolves with any CategoryChannel currently open. */
@@ -1154,7 +1118,7 @@ export async function checkStatus(username: string) {
         console.log(`isOnline --> ${player.isOnline}`);
         bool = player.isOnline;
     }).catch((e: any) => {
-        console.error(e);
+        console.error('ASD', e);
     })
 
     return bool;

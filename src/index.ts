@@ -20,11 +20,12 @@ import { GameState, helpCommand, strikeCheck } from "./typings/games";
 import { bots } from "./managers/socket";
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
+import type { SocketAPI } from "./typings/socket";
 
 dayjs.extend(relativeTime);
 
-let game_cache: strikeCheck[] = [];
 let help_cmd_cache: helpCommand[] = [];
+const voiceQueueMap = new Collection();
 
 !async function(){
 
@@ -310,16 +311,18 @@ let help_cmd_cache: helpCommand[] = [];
         
     });
 
-    client.on("voiceStateUpdate", async (oldState, newState) => {
-        await strikeEmbed();
+    client.on("voiceStateUpdate", async (oldState, newState) => {       
+        if (oldState.channelID === newState.channelID) return;
 
-        if(oldState.channelID === newState.channelID) return;
-        if(!newState.channelID || !newState.channel) return;
+        if (oldState.channelID && (oldState.channel?.members?.size ?? 0) - 1 < (oldState.channel?.userLimit ?? 0) && Constants.QUEUES_ARRAY.flat().includes(oldState.channelID ?? '')) {
+            return await strikeEmbed(newState.id, oldState.channelID);
+        }
+
+        if (!newState.channelID || !newState.channel || !Constants.QUEUES_ARRAY.flat().includes(newState.channelID ?? '')
+            || newState.channel.members.size !== newState.channel.userLimit) return;
+
         const gameMembers = [...newState.channel!.members.array()];
         const ids = gameMembers.map(mem => mem.id);
-        if(!Constants.QUEUES_ARRAY.flat().includes(newState.channelID)) return;
-
-        if(gameMembers.length !== newState.channel.userLimit) return;
 
         try {
             const queueChannel = newState.channel;
@@ -334,8 +337,8 @@ let help_cmd_cache: helpCommand[] = [];
                 voiceChannelID: newState.channelID,
                 pickingOver: false,
             }
-    
-            game_cache.push(strike);
+
+            voiceQueueMap.set(newState.channelID, strike);
 
             const { gameNumber, logger, id: insertedId } = game;
             
@@ -368,7 +371,7 @@ let help_cmd_cache: helpCommand[] = [];
                 textChannel.send(gameMembers.join("")),
                 Players.getManyByDiscord(gameMembers.map(({ id }) => id)),
                 db.games.updateOne({
-                    _id: insertedId
+                    number: gameNumber
                 }, {
                     $set: {
                         textChannel: textChannel.id,
@@ -380,13 +383,18 @@ let help_cmd_cache: helpCommand[] = [];
             const unregistered = gameMembers.filter(mem => !players.map(p => p.discord).includes(mem.id))
             let unreg = unregistered.length > 0? unregistered.join(' '):'';
 
-            if(8 !== players.size){
+            if (8 !== players.size) {
+                voiceQueueMap.delete(newState.channelID);
+                
                 let msg = `${unreg} **unregistered player(s)** are in your queue. Please make sure to register in ${guild.channels.cache.get(Constants.REGISTER_CHANNEL)} before queuing.\n\n**NOTE:** Please ensure that no unregistered/ingame player exists in the queue and that queues are currently open.`;
+                
                 if(gameMembers.length < 8) {
                     msg = `The **queues are not open** right now. Please be patient. Thank you! `;
                 }
+
                 message.channel.send(msg);
-                return setTimeout(await game.cancel(), 10000);
+
+                return setTimeout(() => game.cancel(true), 10000);
             }
 
             const asArray = [...players.values()];
@@ -455,7 +463,7 @@ let help_cmd_cache: helpCommand[] = [];
 
                 if(!msg) continue;
 
-                const g: any = game_cache.find(g => g.textChannelID === textChannel.id);
+                const g: any = voiceQueueMap.find((g: any) => g.textChannelID === textChannel.id);
                 if(g) g.timeOfLastPick = Date.now();
 
                 const user = msg.mentions.users.first()!;
@@ -469,10 +477,12 @@ let help_cmd_cache: helpCommand[] = [];
             }
 
             if(team1.length !== 4 || team2.length !== 4) {
+                voiceQueueMap.delete(newState.channelID);
+
                 return;
             }
 
-            const g = game_cache.find(g => g.textChannelID === textChannel.id);
+            const g: any = voiceQueueMap.find((g: any) => g.textChannelID === textChannel.id);
             if(g) g.pickingOver = true;
 
             const [ tc1, tc2 ] = await Promise.all([
@@ -496,6 +506,15 @@ let help_cmd_cache: helpCommand[] = [];
 
             game.setTeamChannels(tc1, tc2);
 
+            await db.games.updateOne({
+                number: gameNumber
+            }, {
+                $set: {
+                    team1Channel: tc1.id,
+                    team2Channel: tc2.id,
+                }
+            });
+
             await game.enterStartingState();
 
             await Promise.all([
@@ -503,7 +522,7 @@ let help_cmd_cache: helpCommand[] = [];
                 tc2.setParent(teamCallCategory),
             ]);
 
-            await db.activeGame.updateOne({ "_id": game.id }, { $set: { team1Channel: tc1.id, team2Channel: tc2.id } }, { upsert: true });
+            await db.activeGame.updateOne({ _id: game.id }, { $set: { team1Channel: tc1.id, team2Channel: tc2.id, number: gameNumber } }, { upsert: true });
 
             for await (const member of team1.map(p1 => guild.members.cache.get(p1.discord))) {
                 await member?.voice.setChannel(tc1.id).catch(() => logger.info('failed to send players to teams'));
@@ -514,6 +533,8 @@ let help_cmd_cache: helpCommand[] = [];
                 await member?.voice.setChannel(tc2.id).catch(() => logger.info('failed to send players to teams'));
                 await delay(200);
             }
+
+            voiceQueueMap.delete(newState.channelID);
 
             const map = await game.pickMap();
             if(!map) throw new Error("pickMap returned nothing");
@@ -527,6 +548,8 @@ let help_cmd_cache: helpCommand[] = [];
             const loading = await textChannel.send(createEmbed('Looking for an available bot...'));
             const { reason, username: bot } = await game.getAssignedBot();
 
+            console.log(reason, bot);
+
             if (reason === 'GAME_VOID') {
                 await loading.edit(createEmbed('This game is not active. Please re-queue to start a new game.', "RED"));
 
@@ -535,7 +558,7 @@ let help_cmd_cache: helpCommand[] = [];
 
                 await delay(5000);
 
-                return textChannel.send('=fclose');
+                return game.cancel(true);
             }
 
             if (reason === 'NONE_AVAILABLE' || !bot) {
@@ -543,7 +566,7 @@ let help_cmd_cache: helpCommand[] = [];
 
                 await delay(5000);
 
-                return textChannel.send('=fclose');
+                return game.cancel(true);
             }
 
             const _bot = bots.get(bot);
@@ -551,7 +574,18 @@ let help_cmd_cache: helpCommand[] = [];
             if (!_bot) {
                 await loading.edit(createEmbed(`Failed to bind to **${bot}** after **${dayjs(start).from(dayjs(), true)}**.`, 'RED'));
 
-                return game.cancel();
+                await delay(5000);
+
+                return game.cancel(true);
+            }
+
+            const query = (bot ? bots.get(bot) : {})?.handshake?.query as SocketAPI.Query;
+            if (bot !== query.bot) {
+                await loading.edit(createEmbed(`The socket for this bot (**${bot}**) is actually pointing to **${query.bot}**.`, 'RED'));
+
+                await delay(5000);
+
+                return game.cancel(true);
             }
 
             await loading.edit(createEmbed(`The bot **${bot}** has been assigned to your game after **${dayjs(start).from(dayjs(), true)}**.`));
@@ -561,7 +595,7 @@ let help_cmd_cache: helpCommand[] = [];
 
             _bot.once('gameCancel', () => {
                 try {
-                    setTimeout(game.cancel, 10000);
+                    setTimeout(() => game.cancel(true), 10000);
                 } catch(e) {
                     logger.error(`Bot failed to cancel game:\n${e.stack}`);
                 }
@@ -780,8 +814,8 @@ let help_cmd_cache: helpCommand[] = [];
             if (isNaN(streak) || content.length === 0)
                 return message.reply(createEmbed(`Invalid usage. \`=streakmessage @user <streak> <message>\``, "RED"));
 
-            if (streak !== 5 && streak !== 8 && streak !== 12)
-                return message.reply(createEmbed(`Invalid usage. The streak must be either **5**, **8**, or **12**.`, "RED"));
+            if (streak !== 5 && streak !== 8 && streak !== 10)
+                return message.reply(createEmbed(`Invalid usage. The streak must be either **5**, **8**, or **10**.`, "RED"));
 
             const player = await Players.getByDiscord(user.id);
             if(!player)
@@ -1015,15 +1049,6 @@ let help_cmd_cache: helpCommand[] = [];
                 message.reply(createEmbed('Please enter valid user IDs or mention valid discord users to run this command.', "RED"));
             }
             return;
-        }
-
-        if(message.channel.id === '805363821568065558' && message.content.toLowerCase().startsWith('=restart') && message.content.split(' ').length > 1) {
-            const bot = message.content.split(' ')[1];
-            const _bot = bots.get(bot);
-            if(!_bot) return message.reply(`${bot} is not a valid bot.`);
-            _bot.emit("restart");
-            BotManager.release(bot);
-            return message.reply(`${bot} successfully restarted.`);
         }
 
         if (message.channel.type === 'text' && (message.content.toLowerCase().startsWith('=qs') || message.content.toLowerCase().startsWith('=queuestats')) && Constants.CATEGORY_ARRAY.flat().includes(message.channel.parent.id)) {
@@ -1261,7 +1286,7 @@ let help_cmd_cache: helpCommand[] = [];
 
                 await Promise.all([
                     op.execute(),
-                    db.games.updateOne({ _id: game._id }, {
+                    db.games.updateOne({ number: gameId }, {
                         $set: {
                             state: GameState.VOID,
                         }
@@ -1527,8 +1552,8 @@ let help_cmd_cache: helpCommand[] = [];
                 return message.channel.send(createEmbed(`${message.author} you do not have the required permissions to run this command.`, "RED", "RBW Game Management")).catch(() => null);
             }
 
-            const g = game_cache.findIndex(g => g.textChannelID === message.channel.id);
-            if(g !== -1) game_cache.splice(g, 1); 
+            const g: any = voiceQueueMap.find((g: any) => g.textChannelID === message.channel.id);
+            voiceQueueMap.delete(g?.voiceChannel);
 
             const game = activeGames.find(_game => _game.textChannel?.id === message.channel.id);
 
@@ -1537,10 +1562,9 @@ let help_cmd_cache: helpCommand[] = [];
             await db.activeGame.deleteMany({ _id: game.id });
 
             try {
+                console.trace('RAN =FCLOSE');
 
-                const deleteChannels = await game.cancel();
-                deleteChannels();
-
+                await game.cancel(true);
             } catch(e) {
                 logger.error(`Failed to run =fclose command:\n${e.stack}`);
             };
@@ -1573,112 +1597,49 @@ let help_cmd_cache: helpCommand[] = [];
         });
     }, 60*1000)
 
-    async function strikeEmbed() {
-        const t = Date.now();
+    async function strikeEmbed(userID: string, channelID: string) {
+        const member = await guild.members.fetch(userID).catch(() => null);
+        const cache: any = voiceQueueMap.get(channelID);
+        const channel = guild.channels.cache.get(cache?.textChannelID) as TextChannel;
 
-        for (let i = 0; i < game_cache.length; i++) {
-            
-            const g = game_cache[i];
+        if (!member || !cache || !channel || cache.pickingOver) return;
 
-            if(g.pickingOver) {
-                continue;
-            }
+        const game = await (await database).games.findOne({
+            $or: [
+                { voiceChannel: channelID },
+                { textChannel: channel.id } 
+            ]
+        });
 
-            const tc = guild.channels.cache.get(g.textChannelID) as TextChannel;
+        if (!game || game.state !== GameState.PRE_GAME) return;
 
-            if(t - g.timeOfLastPick > 5*1000*60) {
-                tc.send('=fclose');
-                continue;
-            }
+        const message = await channel.send(cache.members.map((id: string) => `<@${id}>`), createEmbed(`Do you want to strike ${member} for leaving the voice channel during picking?`, '#F6BE00', 'RBW Auto-Strike')
+            .setTitle('Automatic Strike')
+            .setImage(member.user?.avatarURL()!));
 
-            const vc = guild.channels.cache.get(g.voiceChannelID);
+        await message.react('✅');
+        await message.react('❌');
 
-            if(vc && vc.members.array().length! < 8 && tc) {
-                const game = activeGames.find(({ voiceChannel }) => voiceChannel?.id === vc.id);
+        const reactions = await message.awaitReactions((r, u) => cache.members.includes(u.id) && ['✅', '❌'].includes(r.emoji.name), { max: 7, time: 30000 });
+        const strike = (reactions.get('✅')?.count ?? 0) > (reactions.get('❌')?.count ?? 0);
 
-                if(game && (game.state === GameState.PRE_GAME)){
+        if (strike) {
+            const striker = guild.channels.cache.get(Constants.STRIKE_UNSTRIKE.AUTOSTRIKE_RESPONSE_CHANNEL) as TextChannel;
 
-                    const arr = vc.members.array().map(mem => mem.id);
-                    const member_id = g.members.filter(mem => !arr.includes(mem))[0];
+            if (striker)
+                await striker.send(`=strike ${member} 1 Left during team picking.`);
 
-                    g.pickingOver = true;
-
-                    const [ deleteChannels, _, m ] = await Promise.all([
-                        game.cancel(),
-                        arr.length > 0 ? game.textChannel!.send(arr.map(a => `<@${a}>`).join(' ')) : null,
-                        game.textChannel!.send(
-                            createEmbed(`Do you want to strike <@${member_id}> for leaving the Voice Channel during picking?`, "#F6BE00", 'RBW Auto-Strike')
-                            .setTitle('Automatic Strike')
-                            .setImage(client.users.cache.get(member_id)?.avatarURL()!)
-                        )
-                    ]);
-        
-                    try {
-                        await m.react('✅').then(async () => {
-                            await m.react('❌');
-                        })
-                        
-                        await m.awaitReactions(r => ['✅', '❌'].includes(r.emoji.name), { max: (game.voiceChannel?.members.size ?? 0 + 1) * 2, time: 30000 });
-                        if(m.reactions.cache.get('✅')?.count! > m.reactions.cache.get('❌')?.count!) {
-                            m.edit(createEmbed(`Strike Successful → <@${member_id}>`, "#228B22", "RBW Auto-Strike").setTitle('Auto Strike → ✅').setImage(client.users.cache.get(member_id)?.avatarURL()!));
-                            (guild.channels.cache.get(Constants.STRIKE_UNSTRIKE.AUTOSTRIKE_RESPONSE_CHANNEL) as TextChannel).send(`=strike <@${member_id}> 1 Left during team picking.`);
-                        }
-                        else {
-                            m.edit(createEmbed(`Strike Unsuccessful → <@${member_id}>`, "RED", "RBW Auto-Strike").setTitle('Auto Strike → ❌').setImage(client.users.cache.get(member_id)?.avatarURL()!));
-                        }
-                        m.reactions.removeAll().catch(() => null);
-                        setTimeout(deleteChannels, 10000);
-                    } catch(e){
-                        logger.error(`Failed to prompt players to vote to strike a player!\n${e.stack}`)
-                    };
-                }
-            }
+            await message.edit(createEmbed(`Strike Successful → ${member}`, 'GREEN', 'RBW Auto-Strike')
+                .setTitle('Auto Strike → ✅')
+                .setImage(member.user?.avatarURL()!));
+        } else {
+            await message.edit(createEmbed(`Strike Unsuccessful → ${member}`, 'RED', 'RBW Auto-Strike')
+                .setTitle('Auto Strike → ❌')
+                .setImage(member.user?.avatarURL()!));
         }
+
+        await delay(3000);
+
+        return channel.delete().catch(() => {});
     }
-
-    async function fixGlitches() {
-        const db = await database;
-        const assignedBots = (await db.bots.find({ "assignedGame": { $exists: true } }).toArray()).map(bot => bot.username);
-        const glitchedBots = [];
-        for (let i = 0; i < assignedBots.length; i++) {
-            const activeBot = await db.activeGame.findOne({ "botIGN": assignedBots[i] });
-            if (!activeBot)
-                glitchedBots.push(activeBot);
-        }
-        ;
-        const restartBots = guild.channels.cache.get('805363821568065558') as TextChannel;
-        for (let i = 0; i < glitchedBots.length; i++) {
-            restartBots?.send(`=restart ${glitchedBots[i]}`).catch(() => null);
-            await delay(400);
-        }
-        ;
-        const activeChannels = (await db.activeGame.find({ "textChannel": { $exists: true } }).toArray());
-        for (let i = 0; i < activeChannels.length; i++) {
-            const channel = guild.channels.cache.get(activeChannels[i].textChannel ?? '') as TextChannel;
-            const team1Channel = guild.channels.cache.get(activeChannels[i].team1Channel ?? '');
-            const team2Channel = guild.channels.cache.get(activeChannels[i].team2Channel ?? '');
-            if (channel && team1Channel && team2Channel) {
-                if (team1Channel.members.size === 0 && team2Channel.members.size === 0) {
-                    channel.send('=fclose');
-                }
-            }
-        }
-    }
-
-    setInterval(fixGlitches, 20000);
-
-    setInterval(() => {
-
-        let spliced = 0;
-
-        game_cache.forEach((g, index) => {
-            if(!guild.channels.cache.find(ch => ch.id === g.textChannelID)) {
-                spliced++;
-                game_cache.splice(index, 1);
-            }
-        })
-
-        if(spliced !== 0) logger.info(`Removed → ${spliced} games from the cache.`);
-
-    }, 10000)
 }();

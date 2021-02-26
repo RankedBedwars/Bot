@@ -13,7 +13,7 @@ if (!DB_URL) {
 }
 exports.default = new Promise((res, rej) => {
     mongodb_1.MongoClient.connect(DB_URL, { useNewUrlParser: true, useUnifiedTopology: true }).then(client => {
-        const db = client.db("rbw");
+        const db = client.db("rbw_dev");
         res({
             bots: db.collection("bots"),
             games: db.collection("games"),

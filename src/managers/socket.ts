@@ -53,20 +53,22 @@ const server = createServer();
 
 const io = new Server(server);
 
-io.use((socket, next) => {
+io.on('connection', socket => {
     const { key, bot } = socket.handshake.query as SocketAPI.Query;
-    if(!key){
-        if(NODE_ENV === "development") devLogger.warn("Refusing connection from unauthenticated socket.");
-        return next(new Error("Authentication failed."));
+
+    console.log(key, bot);
+
+    if (SOCKET_KEY !== key){
+        if (NODE_ENV === "development") devLogger.warn("Refusing connection from socket using an invalid key.");
+
+        return socket.disconnect();
     }
 
-    if(SOCKET_KEY !== key){
-        if(NODE_ENV === "development") devLogger.warn("Refusing connection from socket using an invalid key.");
-        return next(new Error("Authentication failed."));
-    }
-
-    if(bots.get(bot) && NODE_ENV === "development") {
+    if (bots.get(bot) && NODE_ENV === "development") {
         logger.info(JSON.stringify(bots));
+
+        socket.disconnect();
+
         return devLogger.info(`${bot} has connected, but is already in the socket cache.`);
     }
 
@@ -86,7 +88,7 @@ io.use((socket, next) => {
 
     socket.on("gameFinish", async (resultsObject: any) => {
         const db = await database;
-        const game: any = await db.activeGame.findOne({ "botIGN": bot }) || { gameNumber: resultsObject.number, _id: new ObjectId(), botIGN: bot };
+        const game: any = await db.games.findOne({ number: resultsObject.number }) ?? { number: resultsObject.number, _id: new ObjectId() };
 
         const results: any = Object.values(resultsObject.players);           
         const players = (await (await database).players.find({ discord: { $in: results.map((r: any) => r.discord) } }).toArray()).reduce((a: any, b) => {
@@ -102,6 +104,7 @@ io.use((socket, next) => {
                 minecraft: { name: p.minecraft.name },
                 elo: user?.elo ?? 400,
                 kills: p.kills || 0,
+                wins: p.wins || 0,
                 winstreak: user?.winstreak || 0,
                 bedstreak: user?.bedstreak || 0,
                 team: p.team
@@ -117,8 +120,8 @@ io.use((socket, next) => {
         const teams: any = {};
 
         const statistics = Object.values(resultsObject.players).map((p: any) => {
-            const player = players[p.discord];
-            const rating = ratings[p.minecraft.name];
+            const player = players[p.discord] ?? {};
+            const rating = ratings[p.minecraft.name] ?? 400;
 
             const updated = {
                 ...player,
@@ -146,7 +149,7 @@ io.use((socket, next) => {
                     username: p.minecraft.name,
                     winstreak: (player?.winstreak || 0),
                     bedstreak: (player?.bedstreak || 0),
-                    discord: player?.discord || null,
+                    discord: p?.discord || player?.discord || null,
                     oldRating: player?.elo || 400,
                     newRating: updated.elo
                 };
@@ -166,19 +169,18 @@ io.use((socket, next) => {
         }
 
         const teamColours = Object.keys(teams);
-                
+
         await Promise.all([
             gameReport(teams, winner, resultsObject.number, results.map((r: any) => `<@${r.discord}>`).join(''), colourMap, guild),
             _operation.execute(),
             db.games.updateOne({
-                _id: game._id 
+                number: resultsObject.number
             },
             {
                 $set: {
                     state: GameState.FINISHED,
                     team1: teams[teamColours[0]],
-                    team2: teams[teamColours[1]],
-                    number: resultsObject.number
+                    team2: teams[teamColours[1]]
                 }
             },
             {
@@ -186,34 +188,36 @@ io.use((socket, next) => {
             })
         ]);
 
+        console.log(game);
+
         BotManager.release(bot);
 
         if (!guild) return;
 
         setTimeout(async () => {
+            const teamOneVoice = guild.channels.cache.get(game.team1Channel);
+            const teamTwoVoice = guild.channels.cache.get(game.team2Channel);
+            const textChannel = guild.channels.cache.get(game.textChannel);
 
-            if(!(game.textChannel && game.team1Channel && game.team2Channel)) return; 
+            if (textChannel)
+                textChannel.delete();
 
-            guild.channels.cache.get(game.textChannel)!.delete().catch(_ => null);
-
-            const team1Channel = guild.channels.cache.get(game.team1Channel);
-            const team2Channel = guild.channels.cache.get(game.team2Channel);
-
-            if(team1Channel){
-                await Promise.all(team1Channel!.members.map(member => member.voice.setChannel(Constants.WAITING_ROOM))).catch(_ => null);
-                team1Channel?.delete().catch(_ => null);
+            if (teamOneVoice) {
+                await Promise.allSettled(teamOneVoice.members.map(m => m.voice.setChannel(Constants.WAITING_ROOM)));
+                await teamOneVoice.delete().catch(() => {});
             }
-            if(team2Channel){
-                await Promise.all(team2Channel!.members.map(member => member.voice.setChannel(Constants.WAITING_ROOM))).catch(_ => null);
-                team2Channel?.delete().catch(_ => null);
+
+            if (teamTwoVoice) {
+                await Promise.allSettled(teamTwoVoice.members.map(m => m.voice.setChannel(Constants.WAITING_ROOM)));
+                await teamTwoVoice.delete().catch(() => {});
             }
         }, 10000);
 
-        await db.activeGame.deleteOne({ _id: game._id });
+        await db.activeGame.deleteOne({ number: resultsObject.number });
         logger.info(`Successfully finished game ${game._id} (managed by ${bot}).`);
     });
     
-    socket.on("alertStaff", async (nickIGN, gamePlayers) => {
+    socket.on("alertStaff", async (nickIGN: string, gamePlayers: any[]) => {
         try {
             ((await defaultGuild).channels.cache.get('801294842914930698') as TextChannel).send(`**Nick Exploit Detected:** Nick --> ${nickIGN} Players --> ${gamePlayers}`);
         }
@@ -222,7 +226,7 @@ io.use((socket, next) => {
         }
     });
 
-    socket.on('playerStrike', async ({ id, strikes, reason }) => {
+    socket.on('playerStrike', async ({ id, strikes, reason }: { id: string, strikes: number, reason: string }) => {
         const channel = (await defaultGuild).channels.cache.get(Constants.STRIKE_UNSTRIKE.AUTOSTRIKE_RESPONSE_CHANNEL) as TextChannel;
         
         channel.send(`<@${id}> Held banned item`);
@@ -233,7 +237,7 @@ io.use((socket, next) => {
         }
     });
 
-    socket.on('playerBan', async ({ id }) => {
+    socket.on('playerBan', async ({ id }: { id: string }) => {
         const channel = (await defaultGuild).channels.cache.get(Constants.COMMANDS_CHANNEL) as TextChannel;
         const strike = (await defaultGuild).channels.cache.get(Constants.STRIKE_UNSTRIKE.CHANNELS[0]) as TextChannel;
         
@@ -251,9 +255,7 @@ io.use((socket, next) => {
 
         const socket = bots.get(bot);
         if(socket) socket.emit("actualgamestart", new_players);
-    })
-
-    next();
+    });
 });
 
 server.listen(port, () => {
