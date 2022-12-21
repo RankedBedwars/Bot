@@ -14,6 +14,5 @@ Discord bot for queuing matches, checking leaderboards, registering accounts, et
  - Automatic VC creation
  
  ## WARNING
- This project is deprecated now. It runs on old versions of discord.js. It was made to be an on commission project for a large educational institution 
- in Mumbai that used it for several of their events during COVID-19. Now that the MUN is held offline each year, no further work has been done on it and 
- it is now being made public as legacy.
+ This project is deprecated now. It runs on old versions of discord.js. It was made to be an on commission project for a large gaming company (60k+  
+ members) that used it for several of their events and is also currently using an updated version of it.
