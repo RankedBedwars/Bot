@@ -12,7 +12,3 @@ Discord bot for queuing matches, checking leaderboards, registering accounts, et
  - Scoring system
  - ELO management and backend management
  - Automatic VC creation
- 
- ## WARNING
- This project is deprecated now. It runs on old versions of discord.js. It was made to be an on commission project for a large gaming company (60k+  
- members) that used it for several of their events and is also currently using an updated version of it.
